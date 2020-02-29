@@ -5,6 +5,7 @@ extern crate rand;
 extern crate rand_core;
 use rand::SeedableRng;
 use rand_core::{impls, Error, RngCore};
+use core::cell::Cell;
 
 pub struct RomuPrng {
     xstate: u64,
@@ -56,6 +57,103 @@ impl RngCore for RomuPrng {
     }
 }
 
+/// Rng seeded with rdtsc that is generated using Lehmer64
+pub struct Lehmer64 {
+    value: u128,
+}
+
+impl SeedableRng for Lehmer64 {
+    type Seed = [u8; 16];
+    fn from_seed(seed: [u8; 16]) -> Lehmer64 {
+        let (x, y) = if seed == [0; 16] {
+            (0x0DDB1A5E5BAD5EEDu64, 0x519fb20ce6a199bbu64)
+        } else {
+            let x = u64::from_le_bytes([
+                seed[0], seed[1], seed[2], seed[3], seed[4], seed[5], seed[6], seed[7],
+            ]);
+            let y = u64::from_le_bytes([
+                seed[8], seed[9], seed[10], seed[11], seed[12], seed[13], seed[14], seed[15],
+            ]);
+            (x, y)
+        };
+
+        let res = Lehmer64 { value: ((x as u128) << 64 | y as u128) as u128 };
+
+        res
+    }
+}
+
+impl RngCore for Lehmer64 {
+    fn next_u32(&mut self) -> u32 {
+        self.next_u64() as u32
+    }
+
+    fn next_u64(&mut self) -> u64 {
+        self.value = self.value.wrapping_mul(0xda942042e4dd58b5);
+        (self.value >> 64) as u64
+    }
+
+    fn fill_bytes(&mut self, dest: &mut [u8]) {
+        impls::fill_bytes_via_next(self, dest)
+    }
+
+    fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Error> {
+        Ok(self.fill_bytes(dest))
+    }
+}
+
+/// Random number generator implementation using xorshift64
+pub struct Xorshift {
+    /// Interal xorshift seed
+    seed: Cell<u64>,
+}
+
+impl SeedableRng for Xorshift {
+    type Seed = [u8; 16];
+
+    fn from_seed(seed: [u8; 16]) -> Xorshift {
+        let (x, y) = if seed == [0; 16] {
+            (0x0DDB1A5E5BAD5EEDu64, 0x519fb20ce6a199bbu64)
+        } else {
+            let x = u64::from_le_bytes([
+                seed[0], seed[1], seed[2], seed[3], seed[4], seed[5], seed[6], seed[7],
+            ]);
+            let y = u64::from_le_bytes([
+                seed[8], seed[9], seed[10], seed[11], seed[12], seed[13], seed[14], seed[15],
+            ]);
+            (x, y)
+        };
+
+        let res = Xorshift { seed: Cell::new(x) };
+
+        res
+    }
+}
+
+impl RngCore for Xorshift {
+    fn next_u32(&mut self) -> u32 {
+        self.next_u64() as u32
+    }
+
+    fn next_u64(&mut self) -> u64 {
+        let mut seed = self.seed.get();
+        seed ^= seed << 13;
+        seed ^= seed >> 17;
+        seed ^= seed << 43;
+        self.seed.set(seed);
+        seed
+    }
+
+    fn fill_bytes(&mut self, dest: &mut [u8]) {
+        impls::fill_bytes_via_next(self, dest)
+    }
+
+    fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Error> {
+        Ok(self.fill_bytes(dest))
+    }
+}
+
+
 #[cfg(test)]
 mod tests {
 
@@ -105,6 +203,22 @@ mod tests {
     fn bench_pcg(b: &mut Bencher) {
         b.iter(|| {
             let mut prng = Pcg64Mcg::seed_from_u64(12345);
+            let n = test::black_box(10_000);
+            test::black_box((0..n).fold(0, |old, _i| old ^ prng.next_u64()));
+        });
+    }
+    #[bench]
+    fn bench_lehmer64(b: &mut Bencher) {
+        b.iter(|| {
+            let mut prng = Lehmer64::seed_from_u64(12345);
+            let n = test::black_box(10_000);
+            test::black_box((0..n).fold(0, |old, _i| old ^ prng.next_u64()));
+        });
+    }
+    #[bench]
+    fn bench_xorshift(b: &mut Bencher) {
+        b.iter(|| {
+            let mut prng = Xorshift::seed_from_u64(12345);
             let n = test::black_box(10_000);
             test::black_box((0..n).fold(0, |old, _i| old ^ prng.next_u64()));
         });
